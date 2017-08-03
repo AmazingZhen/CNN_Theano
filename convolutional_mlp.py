@@ -117,37 +117,10 @@ class LeNetConvPoolLayer(object):
         # keep track of model input
         self.input = input
 
-        self.predict_func = theano.function([self.input], self.output)
-
-    def predict(input):
-        return self.predict_func(input)
-
 
 class LeNet5(object):
-    """Pool Layer of a convolutional network """
-
-    def __init__(self, rng, nkerns, batch_size, datasets, learning_rate, n_epochs):
-        train_set_x, train_set_y = datasets[0]
-        valid_set_x, valid_set_y = datasets[1]
-        test_set_x, test_set_y = datasets[2]
-
-        # compute number of minibatches for training, validation and testing
-        n_train_batches = train_set_x.get_value(borrow=True).shape[0]
-        n_valid_batches = valid_set_x.get_value(borrow=True).shape[0]
-        n_test_batches = test_set_x.get_value(borrow=True).shape[0]
-        n_train_batches //= batch_size
-        n_valid_batches //= batch_size
-        n_test_batches //= batch_size
-
-        # allocate symbolic variables for the data
-        index = T.lscalar()  # index to a [mini]batch
-
-        # start-snippet-1
-        x = T.matrix('x')   # the data is presented as rasterized images
-        y = T.ivector('y')  # the labels are presented as 1D vector of
-                            # [int] labels
-
-        self.input = x
+    def __init__(self, rng, input, nkerns, batch_size):
+        self.input = input
 
         ######################
         # BUILD ACTUAL MODEL #
@@ -201,125 +174,154 @@ class LeNet5(object):
 
         self.output = self.layer3.y_pred
 
-        # the cost we minimize during training is the NLL of the model
-        cost = self.layer3.negative_log_likelihood(y)
+def train(learning_rate, n_epochs, datasets, nkerns, batch_size):
+    train_set_x, train_set_y = datasets[0]
+    valid_set_x, valid_set_y = datasets[1]
+    test_set_x, test_set_y = datasets[2]
 
-        # create a function to compute the mistakes that are made by the model
-        test_model = theano.function(
-            [index],
-            self.layer3.errors(y),
-            givens={
-                x: test_set_x[index * batch_size: (index + 1) * batch_size],
-                y: test_set_y[index * batch_size: (index + 1) * batch_size]
-            }
-        )
+    # compute number of minibatches for training, validation and testing
+    n_train_batches = train_set_x.get_value(borrow=True).shape[0]
+    n_valid_batches = valid_set_x.get_value(borrow=True).shape[0]
+    n_test_batches = test_set_x.get_value(borrow=True).shape[0]
+    n_train_batches //= batch_size
+    n_valid_batches //= batch_size
+    n_test_batches //= batch_size
 
-        validate_model = theano.function(
-            [index],
-            self.layer3.errors(y),
-            givens={
-                x: valid_set_x[index * batch_size: (index + 1) * batch_size],
-                y: valid_set_y[index * batch_size: (index + 1) * batch_size]
-            }
-        )
+    # allocate symbolic variables for the data
+    index = T.lscalar()  # index to a [mini]batch
+    x = T.matrix('x')  # the data is presented as rasterized images
+    y = T.ivector('y')  # the labels are presented as 1D vector of
+                            # [int] labels
 
-        # create a list of all model parameters to be fit by gradient descent
-        params = self.layer3.params + self.layer2.params + self.layer1.params + self.layer0.params
+    rng = numpy.random.RandomState(1234)
 
-        # create a list of gradients for all model parameters
-        grads = T.grad(cost, params)
+    lenet5 = LeNet5(
+        rng=rng,
+        input=x,
+        nkerns=nkerns,
+        batch_size=batch_size
+    )
 
-        # train_model is a function that updates the model parameters by
-        # SGD Since this model has many parameters, it would be tedious to
-        # manually create an update rule for each model parameter. We thus
-        # create the updates list by automatically looping over all
-        # (params[i], grads[i]) pairs.
-        updates = [
-            (param_i, param_i - learning_rate * grad_i)
-            for param_i, grad_i in zip(params, grads)
-        ]
+    # the cost we minimize during training is the NLL of the model
+    cost = lenet5.layer3.negative_log_likelihood(y)
 
-        train_model = theano.function(
-            [index],
-            cost,
-            updates=updates,
-            givens={
-                x: train_set_x[index * batch_size: (index + 1) * batch_size],
-                y: train_set_y[index * batch_size: (index + 1) * batch_size]
-            }
-        )
-        # end-snippet-1
+    # create a function to compute the mistakes that are made by the model
+    test_model = theano.function(
+        [index],
+        lenet5.layer3.errors(y),
+        givens={
+            x: test_set_x[index * batch_size: (index + 1) * batch_size],
+            y: test_set_y[index * batch_size: (index + 1) * batch_size]
+        }
+    )
 
-        ###############
-        # TRAIN MODEL #
-        ###############
-        print('... training')
-        # early-stopping parameters
-        patience = 10000  # look as this many examples regardless
-        patience_increase = 2  # wait this much longer when a new best is
-                               # found
-        improvement_threshold = 0.995  # a relative improvement of this much is
-                                       # considered significant
-        validation_frequency = min(n_train_batches, patience // 2)
-                                      # go through this many
-                                      # minibatche before checking the network
-                                      # on the validation set; in this case we
-                                      # check every epoch
+    validate_model = theano.function(
+        [index],
+        lenet5.layer3.errors(y),
+        givens={
+            x: valid_set_x[index * batch_size: (index + 1) * batch_size],
+            y: valid_set_y[index * batch_size: (index + 1) * batch_size]
+        }
+    )
 
-        best_validation_loss = numpy.inf
-        best_iter = 0
-        test_score = 0.
-        start_time = timeit.default_timer()
+    # create a list of all model parameters to be fit by gradient descent
+    params = lenet5.layer3.params + lenet5.layer2.params + lenet5.layer1.params + lenet5.layer0.params
 
-        epoch = 0
-        done_looping = False
+    # create a list of gradients for all model parameters
+    grads = T.grad(cost, params)
 
-        while (epoch < n_epochs) and (not done_looping):
-            epoch = epoch + 1
-            for minibatch_index in range(n_train_batches):
+    # train_model is a function that updates the model parameters by
+    # SGD Since this model has many parameters, it would be tedious to
+    # manually create an update rule for each model parameter. We thus
+    # create the updates list by automatically looping over all
+    # (params[i], grads[i]) pairs.
+    updates = [
+        (param_i, param_i - learning_rate * grad_i)
+        for param_i, grad_i in zip(params, grads)
+    ]
 
-                iter = (epoch - 1) * n_train_batches + minibatch_index
+    train_model = theano.function(
+        [index],
+        cost,
+        updates=updates,
+        givens={
+            x: train_set_x[index * batch_size: (index + 1) * batch_size],
+            y: train_set_y[index * batch_size: (index + 1) * batch_size]
+        }
+    )
+    # end-snippet-1
 
-                if iter % 100 == 0:
-                    print('training @ iter = ', iter)
-                cost_ij = train_model(minibatch_index)
+    ###############
+    # TRAIN MODEL #
+    ###############
+    print('... training')
+    # early-stopping parameters
+    patience = 10000  # look as this many examples regardless
+    patience_increase = 2  # wait this much longer when a new best is
+                           # found
+    improvement_threshold = 0.995  # a relative improvement of this much is
+                                   # considered significant
+    validation_frequency = min(n_train_batches, patience // 2)
+                                  # go through this many
+                                  # minibatche before checking the network
+                                  # on the validation set; in this case we
+                                  # check every epoch
 
-                if (iter + 1) % validation_frequency == 0:
+    best_validation_loss = numpy.inf
+    best_iter = 0
+    test_score = 0.
+    start_time = timeit.default_timer()
 
-                    # compute zero-one loss on validation set
-                    validation_losses = [validate_model(i) for i
-                                         in range(n_valid_batches)]
-                    this_validation_loss = numpy.mean(validation_losses)
-                    print('epoch %i, minibatch %i/%i, validation error %f %%' %
-                          (epoch, minibatch_index + 1, n_train_batches,
-                           this_validation_loss * 100.))
+    epoch = 0
+    done_looping = False
 
-                    # if we got the best validation score until now
-                    if this_validation_loss < best_validation_loss:
+    while (epoch < n_epochs) and (not done_looping):
+        epoch = epoch + 1
+        for minibatch_index in range(n_train_batches):
 
-                        #improve patience if loss improvement is good enough
-                        if this_validation_loss < best_validation_loss *  \
-                           improvement_threshold:
-                            patience = max(patience, iter * patience_increase)
+            iter = (epoch - 1) * n_train_batches + minibatch_index
 
-                        # save best validation score and iteration number
-                        best_validation_loss = this_validation_loss
-                        best_iter = iter
+            if iter % 100 == 0:
+                print('training @ iter = ', iter)
+            cost_ij = train_model(minibatch_index)
 
-                        # test it on the test set
-                        test_losses = [
-                            test_model(i)
-                            for i in range(n_test_batches)
-                        ]
-                        test_score = numpy.mean(test_losses)
-                        print(('     epoch %i, minibatch %i/%i, test error of '
-                               'best model %f %%') %
-                              (epoch, minibatch_index + 1, n_train_batches,
-                               test_score * 100.))
+            if (iter + 1) % validation_frequency == 0:
 
-                if patience <= iter:
-                    done_looping = True
-                    break
+                # compute zero-one loss on validation set
+                validation_losses = [validate_model(i) for i
+                                     in range(n_valid_batches)]
+                this_validation_loss = numpy.mean(validation_losses)
+                print('epoch %i, minibatch %i/%i, validation error %f %%' %
+                      (epoch, minibatch_index + 1, n_train_batches,
+                       this_validation_loss * 100.))
+
+                # if we got the best validation score until now
+                if this_validation_loss < best_validation_loss:
+
+                    #improve patience if loss improvement is good enough
+                    if this_validation_loss < best_validation_loss *  \
+                       improvement_threshold:
+                        patience = max(patience, iter * patience_increase)
+
+                    # save best validation score and iteration number
+                    best_validation_loss = this_validation_loss
+                    best_iter = iter
+
+                    # test it on the test set
+                    test_losses = [
+                        test_model(i)
+                        for i in range(n_test_batches)
+                    ]
+                    test_score = numpy.mean(test_losses)
+                    print(('     epoch %i, minibatch %i/%i, test error of '
+                        'best model %f %%') %
+                        (epoch, minibatch_index + 1, n_train_batches,
+                        test_score * 100.)
+                    )
+
+            if patience <= iter:
+                done_looping = True
+                break
 
         end_time = timeit.default_timer()
         print('Optimization complete.')
@@ -330,7 +332,55 @@ class LeNet5(object):
                os.path.split(__file__)[1] +
                ' ran for %.2fm' % ((end_time - start_time) / 60.)), file=sys.stderr)
 
-def evaluate_lenet5(learning_rate=0.1, n_epochs=50,
+    return lenet5
+
+def predict_from_file(file_path, dataset):
+    """
+    An example of how to load a trained model and use it
+    to predict labels.
+    """
+
+    datasets = load_data(dataset)
+    test_set_x, test_set_y = datasets[2]
+
+    # load the saved model
+    model = load(file_path)
+
+    index = T.lscalar()  # index to a [mini]batch
+    x = T.matrix('x')  # the data is presented as rasterized images
+    y = T.ivector('y')  # the labels are presented as 1D vector of
+                        # [int] labels
+    batch_size = 500
+
+    # We can predict it on some examples from dataset
+    predict_func = theano.function(
+        inputs=[model.input],
+        outputs=model.output,
+    )
+
+    # Note that test_set_x is a SharedVariable
+    print(predict_func(test_set_x.get_value()[:batch_size]))
+
+    # Another way to write the function
+    # We can show the error rate on some examples from dataset
+
+
+    error_func = theano.function(
+        inputs=[index],
+        outputs=model.layer3.errors(y),
+        givens={
+            model.input: test_set_x[index * batch_size: (index + 1) * batch_size],
+            y: test_set_y[index * batch_size: (index + 1) * batch_size]
+        }
+    )
+
+    n_test_batches = test_set_x.get_value(borrow=True).shape[0]
+    n_test_batches //= batch_size
+
+    for i in range(n_test_batches):
+        print(error_func(i))
+
+def evaluate_lenet5(learning_rate=0.1, n_epochs=200,
                     dataset='mnist.pkl.gz',
                     nkerns=[20, 50], batch_size=500):
     """ Demonstrates lenet on MNIST dataset
@@ -350,13 +400,10 @@ def evaluate_lenet5(learning_rate=0.1, n_epochs=50,
     """
 
     rng = numpy.random.RandomState(23455)
-
     datasets = load_data(dataset)
-
-    lenet5 = LeNet5(rng, nkerns, batch_size, datasets, learning_rate, n_epochs)
+    lenet5 = train(learning_rate, n_epochs, datasets, nkerns, batch_size)
 
     return lenet5
-
 
 def save(model, file_path):
     f = open(file_path,'wb')
@@ -372,36 +419,23 @@ def load(file_path):
 def experiment(state, channel):
     evaluate_lenet5(state.learning_rate, dataset=state.dataset)
 
-def test():
-    dataset='mnist.pkl.gz'
-    datasets = load_data(dataset)
-    test_set_x, test_set_y = datasets[2]
-
-    test_set_x = test_set_x.get_value()
-    #test_set_y = test_set_y.get_value()
-    batch_size = 500
-    test_set_x = test_set_x[:batch_size]
-
-    file_path = 'cnn_model.pkl'
-    lenet5 = load(file_path)
-
-    test_model = theano.function(
-        inputs=[lenet5.input],
-        outputs=lenet5.output,
-    )
-
-    y_pred = test_model(test_set_x)
-
-    print (y_pred)
+shutdown = True
+import os
 
 if __name__ == '__main__':
     choice = input("save or load\n")
+    model_path = 'cnn_model.pkl'
+    dataset='mnist.pkl.gz'
     if choice == 1:
         lenet5 = evaluate_lenet5()
         file_path = 'cnn_model.pkl'
         save(lenet5, file_path)
+
+        if shutdown:
+            os.system("shutdown -s -t 10")
+
     elif choice == 2:
-        test()
+        predict_from_file(model_path, dataset)
         #print(test(lenet5))
         #print('The accuracy is %.2f' % (test(lenet5)))
 
